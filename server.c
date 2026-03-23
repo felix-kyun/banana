@@ -108,6 +108,7 @@ create_virtual_device(header_t header)
         if (!(header.ev_bits[ev / 8] & (1 << (ev % 8)))) {
             continue;
         }
+        ioctl(fd, UI_SET_EVBIT, ev);
 
         if (ev == EV_KEY) {
             for (int k = 0; k < KEY_MAX; k++) {
