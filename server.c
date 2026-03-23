@@ -4,14 +4,17 @@
     SPDX-License-Identifier: MIT
     Copyright (c) 2026 Praise Jacob
  */
-
+#define _GNU_SOURCE
 #include "server.h"
 #include "shared.h"
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <linux/input.h>
+#include <linux/uinput.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -52,16 +55,25 @@ main(void)
     printf("Name: %s\n", header.name);
     printf("ID: %x:%x\n", header.id.vendor, header.id.product);
 
-    // create device here
+    int device_fd = create_virtual_device(header);
+    if (device_fd == -1) {
+        exit(EXIT_FAILURE);
+    }
+    usleep(100000); // 100ms
 
     puts("Relaying events. Ctrl+C to stop.");
     struct input_event ev;
     while (read_all(client_fd, &ev, sizeof(ev)) > 0) {
         printf("Event: type=%u, code=%u, value=%u\n", ev.type, ev.code, ev.value);
+        if (write(device_fd, &ev, sizeof(ev)) == -1) {
+            perror("write");
+            break;
+        }
     }
 
     puts("Client disconnected");
     close(client_fd);
+    ioctl(device_fd, UI_DEV_DESTROY);
     close(fd);
     return 0;
 }
@@ -79,4 +91,67 @@ read_all(int fd, void* buf, size_t len)
     }
 
     return (ssize_t)got;
+}
+
+int
+create_virtual_device(header_t header)
+{
+    int fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
+    if (fd < 0) {
+        perror("open");
+        fputs("Hint: modprobe uinput or fix permissions", stderr);
+        return -1;
+    }
+
+    // enable events
+    for (int ev = 0; ev < EV_MAX; ev++) {
+        if (!(header.ev_bits[ev / 8] & (1 << (ev % 8)))) {
+            continue;
+        }
+
+        if (ev == EV_KEY) {
+            for (int k = 0; k < KEY_MAX; k++) {
+                if (header.key[k / 8] & (1 << (k % 8))) {
+                    ioctl(fd, UI_SET_KEYBIT, k);
+                }
+            }
+        }
+
+        if (ev == EV_REL) {
+            for (int r = 0; r < REL_MAX; r++) {
+                if (header.rel[r / 8] & (1 << (r % 8))) {
+                    ioctl(fd, UI_SET_RELBIT, r);
+                }
+            }
+        }
+
+        if (ev == EV_ABS) {
+            for (int a = 0; a < ABS_MAX; a++) {
+                if (header.abs[a / 8] & (1 << (a % 8))) {
+                    ioctl(fd, UI_SET_ABSBIT, a);
+                    struct uinput_abs_setup abs_setup = { .code = (uint16_t)a, .absinfo = header.abs_info[a] };
+                    ioctl(fd, UI_ABS_SETUP, &abs_setup);
+                }
+            }
+        }
+    }
+
+    struct uinput_setup setup = { .id = header.id };
+    strncpy(setup.name, header.name, UINPUT_MAX_NAME_SIZE - 1);
+
+    if (ioctl(fd, UI_DEV_SETUP, &setup) == -1) {
+        perror("UI_DEV_SETUP");
+        close(fd);
+        return -1;
+    }
+
+    if (ioctl(fd, UI_DEV_CREATE) == -1) {
+        perror("UI_DEV_CREATE");
+        close(fd);
+        return -1;
+    }
+
+    printf("Virtual device created: %s\n", header.name);
+
+    return fd;
 }
