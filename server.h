@@ -1,3 +1,10 @@
+/*
+    Author:   Praise Jacob <iampraisejacob@gmail.com>
+    Repo:     https://github.com/felix-kyun/banana
+    SPDX-License-Identifier: MIT
+    Copyright (c) 2026 Praise Jacob
+ */
+
 #include <sys/types.h>
 #include "shared.h"
 
